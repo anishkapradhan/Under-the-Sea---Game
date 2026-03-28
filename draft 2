@@ -1,2 +1,664 @@
 git clone <your-repo-url>
 cd <repo-name>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mermaid Seashell Sprint</title>
+  <style>
+    :root {
+      --bg1: #83d8ff;
+      --bg2: #2276b9;
+      --sand: #e8d4a2;
+      --reef: #825d4a;
+      --kelp: #1f9d55;
+      --ui: #102a43;
+      --ui2: #f0f4f8;
+      --danger: #ff595e;
+      --gold: #ffd166;
+      --finish: #ffffff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Courier New", monospace;
+      background: linear-gradient(to bottom, var(--bg1), var(--bg2));
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    canvas {
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      border: 6px solid #0b1f33;
+      box-shadow: 0 18px 48px rgba(0,0,0,0.35);
+      background: #55c3ff;
+      max-width: 100vw;
+      max-height: 100vh;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="960" height="600"></canvas>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const W = canvas.width;
+    const H = canvas.height;
+    const TRACK_LEFT = 70;
+    const TRACK_RIGHT = W - 110;
+    const TRACK_TOP = 90;
+    const TRACK_BOTTOM = H - 70;
+    const LANES = 4;
+    const LANE_H = (TRACK_BOTTOM - TRACK_TOP) / LANES;
+    const FINISH_X = 4120;
+    const TOTAL_SHELLS = 20;
+    const WORLD_W = 4600;
+    const START_X = 120;
+
+    let gameState = 'menu';
+    let cameraX = 0;
+    let lastTime = 0;
+    let flashTimer = 0;
+
+    const keys = {};
+    window.addEventListener('keydown', (e) => {
+      keys[e.key.toLowerCase()] = true;
+      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
+      if (gameState === 'menu' && (e.key === ' ' || e.key === 'Enter')) resetGame();
+      if (gameState === 'finished' && (e.key.toLowerCase() === 'r' || e.key === 'Enter')) resetGame();
+    });
+    window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+
+    function rand(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+
+    function clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function laneY(index) {
+      return TRACK_TOP + index * LANE_H + LANE_H / 2;
+    }
+
+    function aabb(a, b) {
+      return a.x < b.x + b.w &&
+             a.x + a.w > b.x &&
+             a.y < b.y + b.h &&
+             a.y + a.h > b.y;
+    }
+
+    function makeRacer(name, lane, colorA, colorB, isPlayer = false, species = 'fish') {
+      return {
+        name,
+        lane,
+        x: START_X,
+        y: laneY(lane),
+        w: 58,
+        h: 40,
+        vx: 0,
+        baseSpeed: 248,
+        accel: 440,
+        maxSpeed: 372,
+        drift: 0,
+        bob: rand(0, Math.PI * 2),
+        shells: 0,
+        hitCooldown: 0,
+        finished: false,
+        finishTime: null,
+        isPlayer,
+        species,
+        colorA,
+        colorB,
+        boost: 0,
+        aiTargetY: laneY(lane),
+        controlsLocked: false,
+      };
+    }
+
+    let player;
+    let racers;
+    let shells;
+    let obstacles;
+    let bubbles;
+
+    function buildCourse() {
+      shells = [];
+      obstacles = [];
+      bubbles = [];
+
+      for (let x = 320; x < WORLD_W - 180; x += 120) {
+        const count = Math.random() < 0.6 ? 1 : 2;
+        for (let i = 0; i < count; i++) {
+          const lane = Math.floor(rand(0, LANES));
+          const typeRoll = Math.random();
+          const y = laneY(lane) + rand(-18, 18);
+          if (typeRoll < 0.4) {
+            obstacles.push({ x: x + rand(-20, 20), y: y - 20, w: 26, h: 40, type: 'rock' });
+          } else if (typeRoll < 0.75) {
+            obstacles.push({ x: x + rand(-20, 20), y: y - 28, w: 20, h: 56, type: 'coral' });
+          } else {
+            obstacles.push({ x: x + rand(-20, 20), y: y - 30, w: 14, h: 60, type: 'kelp' });
+          }
+        }
+      }
+
+      const shellXs = [];
+      for (let i = 0; i < TOTAL_SHELLS; i++) {
+        shellXs.push(280 + i * ((WORLD_W - 560) / (TOTAL_SHELLS - 1)) + rand(-28, 28));
+      }
+
+      function shellSpotIsSafe(x, y) {
+        for (const o of obstacles) {
+          const closeX = Math.abs((o.x + o.w / 2) - x);
+          const closeY = Math.abs((o.y + o.h / 2) - y);
+          if (closeX < 54 && closeY < 42) return false;
+        }
+        return y > TRACK_TOP + 26 && y < TRACK_BOTTOM - 26;
+      }
+
+      for (let i = 0; i < TOTAL_SHELLS; i++) {
+        let lane = i % LANES;
+        let y = laneY(lane);
+        let placed = false;
+
+        for (let tries = 0; tries < 16; tries++) {
+          const tryLane = (lane + tries) % LANES;
+          const tryY = laneY(tryLane) + rand(-LANE_H * 0.08, LANE_H * 0.08);
+          if (shellSpotIsSafe(shellXs[i], tryY)) {
+            y = tryY;
+            placed = true;
+            break;
+          }
+        }
+
+        if (!placed) {
+          y = clamp(laneY(lane), TRACK_TOP + 30, TRACK_BOTTOM - 30);
+        }
+
+        shells.push({
+          x: shellXs[i],
+          y,
+          w: 18,
+          h: 18,
+          taken: false,
+          bob: rand(0, Math.PI * 2)
+        });
+      }
+
+      for (let i = 0; i < 180; i++) {
+        bubbles.push({
+          x: rand(0, WORLD_W),
+          y: rand(TRACK_TOP - 20, TRACK_BOTTOM + 30),
+          r: rand(1.5, 4),
+          speed: rand(8, 24),
+          wobble: rand(0, Math.PI * 2)
+        });
+      }
+    }
+
+    function resetGame() {
+      player = makeRacer('Mermaid', 1, '#ff77c8', '#8ce7ff', true, 'mermaid');
+      racers = [
+        player,
+        makeRacer('Tico Tuna', 0, '#72efdd', '#56cfe1', false, 'fish'),
+        makeRacer('Crabby', 2, '#ff9e6d', '#ff4fa3', false, 'crab'),
+        makeRacer('Glider Ray', 3, '#cdb4ff', '#7b2cbf', false, 'ray'),
+        makeRacer('Octo Zip', 0, '#b8f2e6', '#4cc9f0', false, 'octopus')
+      ];
+
+      racers.forEach((r, i) => {
+        r.x = START_X - i * 12;
+        r.y = laneY(r.lane);
+      });
+
+      buildCourse();
+      cameraX = 0;
+      flashTimer = 0;
+      gameState = 'playing';
+    }
+
+    function obstaclePenalty(racer) {
+      racer.vx *= 0.45;
+      racer.boost = 0;
+      racer.hitCooldown = 0.7;
+      if (racer.isPlayer) flashTimer = 0.25;
+    }
+
+    function updatePlayer(dt) {
+      if (player.finished) return;
+
+      const up = keys['arrowup'] || keys['w'];
+      const down = keys['arrowdown'] || keys['s'];
+      const left = keys['arrowleft'] || keys['a'];
+      const right = keys['arrowright'] || keys['d'];
+
+      const targetAccel = right ? player.accel : player.accel * 0.18;
+      player.vx += targetAccel * dt;
+      player.vx -= (left ? 170 : 72) * dt;
+      player.vx = clamp(player.vx, 150, player.maxSpeed + player.boost);
+
+      if (up) player.y -= 180 * dt;
+      if (down) player.y += 180 * dt;
+
+      player.y = clamp(player.y, TRACK_TOP + 12, TRACK_BOTTOM - 12);
+      player.x += player.vx * dt;
+
+      if (player.hitCooldown > 0) player.hitCooldown -= dt;
+    }
+
+    function nearestUntakenShellForAI(racer) {
+      let best = null;
+      let bestDist = Infinity;
+      for (const s of shells) {
+        if (s.taken || s.x < racer.x - 10) continue;
+        const dx = s.x - racer.x;
+        if (dx < 0 || dx > 280) continue;
+        const dy = Math.abs(s.y - racer.y);
+        const score = dx + dy * 1.5;
+        if (score < bestDist) {
+          bestDist = score;
+          best = s;
+        }
+      }
+      return best;
+    }
+
+    function upcomingObstacleInLane(racer) {
+      let best = null;
+      let bestDx = Infinity;
+      for (const o of obstacles) {
+        const sameBand = Math.abs((o.y + o.h / 2) - racer.y) < 28;
+        const dx = o.x - racer.x;
+        if (sameBand && dx > -10 && dx < 120 && dx < bestDx) {
+          bestDx = dx;
+          best = o;
+        }
+      }
+      return best;
+    }
+
+    function updateAI(racer, dt) {
+      if (racer.finished) return;
+
+      const shell = nearestUntakenShellForAI(racer);
+      const danger = upcomingObstacleInLane(racer);
+
+      let targetY = laneY(racer.lane);
+
+      if (shell) {
+        targetY = shell.y;
+      }
+
+      if (danger) {
+        const options = [laneY(0), laneY(1), laneY(2), laneY(3)]
+          .filter(y => Math.abs(y - (danger.y + danger.h / 2)) > 38)
+          .sort((a, b) => Math.abs(a - racer.y) - Math.abs(b - racer.y));
+        if (options.length) targetY = options[0];
+      }
+
+      racer.aiTargetY += (targetY - racer.aiTargetY) * Math.min(1, dt * 4);
+      racer.y += Math.sign(racer.aiTargetY - racer.y) * 120 * dt;
+      racer.y = clamp(racer.y, TRACK_TOP + 12, TRACK_BOTTOM - 12);
+
+      const speedGoal = racer.baseSpeed;
+      racer.vx += Math.sign(speedGoal - racer.vx) * racer.accel * 0.65 * dt;
+      racer.vx = clamp(racer.vx, 150, racer.maxSpeed + racer.boost);
+      racer.x += racer.vx * dt;
+
+      if (racer.hitCooldown > 0) racer.hitCooldown -= dt;
+    }
+
+    function handleCollections() {
+      for (const racer of racers) {
+        const hitbox = { x: racer.x - racer.w / 2, y: racer.y - racer.h / 2, w: racer.w, h: racer.h };
+
+        for (const s of shells) {
+          if (s.taken) continue;
+          const box = { x: s.x - 9, y: s.y - 9, w: 18, h: 18 };
+          if (aabb(hitbox, box)) {
+            s.taken = true;
+            racer.shells++;
+            racer.boost = Math.min((racer.boost || 0) + 12, 60);
+          }
+        }
+
+        if (racer.boost > 0) racer.boost *= 0.992;
+
+        if (racer.hitCooldown <= 0) {
+          for (const o of obstacles) {
+            if (aabb(hitbox, o)) {
+              obstaclePenalty(racer);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    function checkFinish(dt) {
+      let allFinished = true;
+      for (const racer of racers) {
+        if (!racer.finished && racer.x >= FINISH_X) {
+          racer.finished = true;
+          racer.finishTime = performance.now();
+          racer.x = FINISH_X;
+        }
+        if (!racer.finished) allFinished = false;
+      }
+      if (allFinished) gameState = 'finished';
+    }
+
+    function updateBubbles(dt) {
+      for (const b of bubbles) {
+        b.y -= b.speed * dt;
+        b.x += Math.sin(performance.now() * 0.001 + b.wobble) * 0.25;
+        if (b.y < TRACK_TOP - 25) {
+          b.y = TRACK_BOTTOM + 20;
+          b.x = cameraX + rand(-50, W + 60);
+        }
+      }
+    }
+
+    function update(dt) {
+      if (gameState !== 'playing') return;
+      updatePlayer(dt);
+      for (const r of racers) if (!r.isPlayer) updateAI(r, dt);
+      handleCollections();
+      checkFinish(dt);
+      updateBubbles(dt);
+      cameraX = clamp(player.x - 240, 0, WORLD_W - W + 80);
+      flashTimer = Math.max(0, flashTimer - dt);
+    }
+
+    function rect(x, y, w, h, c) {
+      ctx.fillStyle = c;
+      ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    }
+
+    function drawPixelText(text, x, y, color = '#fff', size = 1) {
+      ctx.fillStyle = color;
+      ctx.font = `${16 * size}px Courier New`;
+      ctx.textBaseline = 'top';
+      ctx.fillText(text, Math.round(x), Math.round(y));
+    }
+
+    function drawBackground() {
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#8ff7ff');
+      g.addColorStop(0.22, '#73dcff');
+      g.addColorStop(0.55, '#3c9dff');
+      g.addColorStop(1, '#243b8f');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+
+      for (let i = 0; i < 8; i++) {
+        const x = (i * 150 - (cameraX * 0.12) % 150);
+        rect(x, 38 + (i % 3) * 10, 92, 10, 'rgba(255,255,255,0.18)');
+        rect(x + 16, 48 + (i % 3) * 10, 60, 8, 'rgba(255,255,255,0.14)');
+      }
+
+      for (let i = 0; i < 10; i++) {
+        const beamX = (i * 110 - (cameraX * 0.2) % 110);
+        rect(beamX, 0, 12, TRACK_BOTTOM - 40, 'rgba(255,255,255,0.04)');
+      }
+
+      rect(0, TRACK_TOP - 16, W, TRACK_BOTTOM - TRACK_TOP + 32, 'rgba(68, 0, 120, 0.08)');
+
+      for (let i = 0; i < LANES + 1; i++) {
+        const y = TRACK_TOP + i * LANE_H;
+        rect(0, y, W, 2, 'rgba(255,255,255,0.2)');
+      }
+
+      rect(0, TRACK_BOTTOM - 18, W, 18, '#ffdb9b');
+      rect(0, TRACK_BOTTOM, W, H - TRACK_BOTTOM, '#ffc76e');
+      rect(0, TRACK_BOTTOM + 20, W, H - TRACK_BOTTOM - 20, '#ffb347');
+
+      for (let i = 0; i < 24; i++) {
+        const x = (i * 76 - (cameraX * 0.55) % 76);
+        rect(x, TRACK_BOTTOM - 20, 20, 20, '#ffcf70');
+        rect(x + 7, TRACK_BOTTOM - 34, 6, 14, '#2ec4b6');
+        rect(x + 2, TRACK_BOTTOM - 26, 6, 12, '#f15bb5');
+      }
+
+      for (let i = 0; i < 11; i++) {
+        const palaceX = (i * 118 - (cameraX * 0.33) % 118);
+        rect(palaceX, TRACK_BOTTOM - 44, 18, 22, '#ff5da2');
+        rect(palaceX + 6, TRACK_BOTTOM - 60, 6, 16, '#ffd166');
+        rect(palaceX + 16, TRACK_BOTTOM - 54, 12, 32, '#7b2cbf');
+        rect(palaceX + 28, TRACK_BOTTOM - 42, 14, 20, '#00c2ff');
+      }
+
+      for (let i = 0; i < 12; i++) {
+        const starX = (i * 90 - (cameraX * 0.4) % 90);
+        rect(starX, TRACK_BOTTOM + 10 + (i % 4) * 8, 6, 6, '#ff8fab');
+        rect(starX + 2, TRACK_BOTTOM + 8 + (i % 4) * 8, 2, 10, '#ffe066');
+      }
+    }
+
+    function worldToScreenX(x) { return x - cameraX; }
+
+    function drawFinishLine() {
+      const sx = worldToScreenX(FINISH_X);
+      if (sx < -60 || sx > W + 60) return;
+      for (let y = TRACK_TOP; y < TRACK_BOTTOM; y += 24) {
+        rect(sx, y, 14, 12, '#ffffff');
+        rect(sx + 14, y + 12, 14, 12, '#ff7ad9');
+        rect(sx + 28, y, 14, 12, '#7cecff');
+        rect(sx + 42, y + 12, 14, 12, '#ffffff');
+      }
+      rect(sx - 6, TRACK_TOP - 14, 6, TRACK_BOTTOM - TRACK_TOP + 28, '#5a189a');
+      rect(sx + 48, TRACK_TOP - 14, 6, TRACK_BOTTOM - TRACK_TOP + 28, '#5a189a');
+    }
+
+    function drawShell(s) {
+      const x = worldToScreenX(s.x);
+      const bob = Math.sin(performance.now() * 0.005 + s.bob) * 3;
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, s.y + bob, 14, 0, Math.PI * 2);
+      ctx.stroke();
+
+      rect(x - 10, s.y + bob - 3, 20, 4, '#fff1f2');
+      rect(x - 12, s.y + bob + 1, 24, 5, '#ffd6e0');
+      rect(x - 10, s.y + bob + 6, 20, 4, '#ffb3c6');
+      rect(x - 6, s.y + bob, 2, 10, '#ff4d8d');
+      rect(x - 2, s.y + bob, 2, 10, '#ffd166');
+      rect(x + 2, s.y + bob, 2, 10, '#70d6ff');
+      rect(x + 6, s.y + bob, 2, 10, '#c77dff');
+      rect(x - 2, s.y + bob - 11, 4, 3, '#ffffff');
+    }
+
+    function drawObstacle(o) {
+      const x = worldToScreenX(o.x);
+      if (x < -60 || x > W + 60) return;
+      if (o.type === 'rock') {
+        rect(x, o.y + 10, o.w, o.h - 10, '#7b8cff');
+        rect(x + 4, o.y + 4, o.w - 8, 12, '#b8c0ff');
+        rect(x + 8, o.y + 14, 6, 6, '#5a67d8');
+      } else if (o.type === 'coral') {
+        rect(x + 6, o.y + 18, 8, o.h - 18, '#ff4fa3');
+        rect(x, o.y + 8, 8, 18, '#ff85c1');
+        rect(x + 12, o.y, 8, 24, '#ffa94d');
+      } else {
+        rect(x + 4, o.y, 6, o.h, '#2dd4bf');
+        rect(x, o.y + 10, 6, 18, '#52b788');
+        rect(x + 8, o.y + 24, 6, 16, '#80ed99');
+      }
+    }
+
+    function drawRacer(r) {
+      const x = worldToScreenX(r.x);
+      const y = Math.round(r.y);
+
+      if (r.isPlayer) {
+        // Larger original mermaid-princess sprite with unmistakable mermaid silhouette.
+        rect(x - 12, y - 38, 18, 12, '#f1cfb3');
+        rect(x - 18, y - 48, 30, 8, '#c1121f');
+        rect(x - 22, y - 42, 36, 8, '#e5383b');
+        rect(x - 18, y - 34, 28, 8, '#ff7f51');
+        rect(x - 14, y - 24, 10, 8, '#8e44ad');
+        rect(x - 2, y - 24, 10, 8, '#b5179e');
+        rect(x - 10, y - 16, 18, 10, '#2ec4b6');
+        rect(x - 4, y - 6, 20, 10, '#20c997');
+        rect(x + 12, y - 2, 18, 10, '#38b000');
+        rect(x + 24, y - 10, 10, 8, '#52b788');
+        rect(x + 30, y - 16, 10, 8, '#80ed99');
+        rect(x + 30, y + 2, 10, 8, '#80ed99');
+        rect(x + 40, y - 10, 8, 10, '#34d399');
+        rect(x + 40, y + 0, 8, 10, '#34d399');
+        rect(x - 6, y - 33, 2, 2, '#111');
+        rect(x + 0, y - 33, 2, 2, '#111');
+        rect(x + 6, y - 18, 4, 3, '#ffd6ff');
+      } else if (r.species === 'fish') {
+        rect(x - 18, y - 10, 26, 16, r.colorA);
+        rect(x + 8, y - 5, 10, 8, r.colorB);
+        rect(x - 24, y - 2, 8, 6, r.colorB);
+        rect(x - 8, y - 14, 8, 4, '#ffffff66');
+      } else if (r.species === 'crab') {
+        rect(x - 14, y - 8, 24, 16, r.colorA);
+        rect(x - 20, y - 12, 6, 6, r.colorB);
+        rect(x + 10, y - 12, 6, 6, r.colorB);
+        rect(x - 18, y + 8, 4, 8, r.colorB);
+        rect(x - 8, y + 8, 4, 8, r.colorB);
+        rect(x + 2, y + 8, 4, 8, r.colorB);
+        rect(x + 12, y + 8, 4, 8, r.colorB);
+      } else if (r.species === 'ray') {
+        rect(x - 20, y - 4, 36, 8, r.colorA);
+        rect(x - 10, y - 12, 14, 24, r.colorA);
+        rect(x + 16, y - 2, 14, 4, r.colorB);
+        rect(x - 3, y - 1, 6, 4, '#ffffff55');
+      } else {
+        rect(x - 12, y - 10, 20, 18, r.colorA);
+        rect(x - 4, y - 18, 8, 8, '#ffd6ff');
+        for (let i = 0; i < 4; i++) rect(x - 18 + i * 8, y + 8, 4, 8, r.colorB);
+      }
+
+      if (r.hitCooldown > 0) {
+        rect(x - 20, y - 34, 40, 4, '#ff595e');
+      }
+    }
+
+    function drawHUD() {
+      rect(14, 14, 290, 74, 'rgba(16,42,67,0.86)');
+      rect(18, 18, 282, 66, 'rgba(255,255,255,0.08)');
+      drawPixelText('MERMAID SEASHELL SPRINT', 28, 28, '#f8fbff');
+      drawPixelText(`Shells: ${player ? player.shells : 0}/20`, 28, 52, '#ffd166');
+      drawPixelText(`Position: ${getPlayerPlace()}`, 170, 52, '#c3f0ff');
+
+      rect(W - 240, 14, 226, 112, 'rgba(16,42,67,0.86)');
+      drawPixelText('RACE', W - 220, 28, '#f8fbff');
+      const sorted = [...racers].sort((a, b) => b.x - a.x);
+      sorted.forEach((r, i) => {
+        const color = r.isPlayer ? '#ffd166' : '#e6f4ff';
+        drawPixelText(`${i + 1}. ${r.name}`, W - 220, 50 + i * 16, color, 0.9);
+      });
+
+      const progress = clamp((player.x - START_X) / (FINISH_X - START_X), 0, 1);
+      rect(120, H - 38, W - 240, 16, 'rgba(16,42,67,0.85)');
+      rect(124, H - 34, (W - 248) * progress, 8, '#72efdd');
+      rect(118 + (W - 240) * progress, H - 42, 8, 24, '#ff77b7');
+      drawPixelText('START', 34, H - 44, '#ffffff', 0.85);
+      drawPixelText('FINISH', W - 90, H - 44, '#ffffff', 0.85);
+    }
+
+    function getPlayerPlace() {
+      if (!racers) return '-';
+      const sorted = [...racers].sort((a, b) => b.x - a.x);
+      return sorted.findIndex(r => r.isPlayer) + 1;
+    }
+
+    function drawMenu() {
+      drawBackground();
+      rect(130, 120, 700, 330, 'rgba(16,42,67,0.82)');
+      rect(150, 140, 660, 290, 'rgba(255,255,255,0.06)');
+      drawPixelText('MERMAID SEASHELL SPRINT', 220, 170, '#ffffff', 2);
+      drawPixelText('All racers have the same speed now.', 225, 235, '#d9f3ff');
+      drawPixelText('Collect seashells floating in bubbles.', 225, 265, '#d9f3ff');
+      drawPixelText('Avoid rocks, coral, and kelp obstacles.', 225, 295, '#d9f3ff');
+      drawPixelText('Bigger mermaid sprite and safer shell paths.', 225, 325, '#ffd166');
+      drawPixelText('Controls: Arrow Keys or WASD', 225, 365, '#c3f0ff');
+      drawPixelText('Press SPACE to start', 325, 405, '#ffcad4', 1.2);
+
+      const preview = makeRacer('Preview', 1, '#ff77b7', '#7fdbff', true, 'mermaid');
+      preview.x = 760 + Math.sin(performance.now() * 0.003) * 10;
+      preview.y = 505;
+      drawRacer(preview);
+    }
+
+    function drawFinishScreen() {
+      const sorted = [...racers].sort((a, b) => {
+        if (a.finished && b.finished) return a.finishTime - b.finishTime;
+        return b.x - a.x;
+      });
+      const place = sorted.findIndex(r => r.isPlayer) + 1;
+      const won = place === 1;
+      const shellText = player.shells >= 18 ? 'Nearly perfect shell run.' : player.shells >= 12 ? 'Strong shell capture.' : 'Tough course. Try a cleaner route.';
+
+      rect(160, 120, 640, 340, 'rgba(16,42,67,0.9)');
+      rect(180, 140, 600, 300, 'rgba(255,255,255,0.06)');
+      drawPixelText(won ? 'YOU WON THE RACE' : 'RACE COMPLETE', 315, 170, won ? '#72efdd' : '#ffffff', 1.8);
+      drawPixelText(`Finish Place: ${place}`, 270, 235, '#ffffff', 1.2);
+      drawPixelText(`Seashells Collected: ${player.shells}/20`, 270, 275, '#ffd166', 1.2);
+      drawPixelText(shellText, 270, 315, '#d9f3ff');
+      drawPixelText(won ? 'The mermaid reaches the finish first.' : 'The bots put up a real fight.', 270, 345, '#d9f3ff');
+      drawPixelText('Press R to race again', 330, 395, '#ffcad4', 1.1);
+    }
+
+    function render() {
+      drawBackground();
+
+      if (gameState === 'menu') {
+        drawMenu();
+        return;
+      }
+
+      drawFinishLine();
+
+      for (const b of bubbles) {
+        const x = worldToScreenX(b.x);
+        if (x < -10 || x > W + 10) continue;
+        ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(x, b.y, b.r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      for (const s of shells) if (!s.taken) drawShell(s);
+      for (const o of obstacles) drawObstacle(o);
+      for (const r of racers) drawRacer(r);
+      drawHUD();
+
+      if (flashTimer > 0) {
+        ctx.fillStyle = `rgba(255, 89, 94, ${flashTimer * 0.5})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      if (gameState === 'finished') drawFinishScreen();
+    }
+
+    function loop(ts) {
+      const dt = Math.min(0.033, (ts - lastTime) / 1000 || 0.016);
+      lastTime = ts;
+      update(dt);
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    render();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
