@@ -499,52 +499,71 @@ cd <repo-name>
     }
 
     function drawRacer(r) {
-      const x = worldToScreenX(r.x);
-      const y = Math.round(r.y);
+  const x = worldToScreenX(r.x);
+  const y = Math.round(r.y);
 
-      if (r.isPlayer) {
-        // Larger original mermaid-princess sprite with unmistakable mermaid silhouette.
-        rect(x - 12, y - 38, 18, 12, '#f1cfb3');
-        rect(x - 18, y - 48, 30, 8, '#c1121f');
-        rect(x - 22, y - 42, 36, 8, '#e5383b');
-        rect(x - 18, y - 34, 28, 8, '#ff7f51');
-        rect(x - 14, y - 24, 10, 8, '#8e44ad');
-        rect(x - 2, y - 24, 10, 8, '#b5179e');
-        rect(x - 10, y - 16, 18, 10, '#2ec4b6');
-        rect(x - 4, y - 6, 20, 10, '#20c997');
-        rect(x + 12, y - 2, 18, 10, '#38b000');
-        rect(x + 24, y - 10, 10, 8, '#52b788');
-        rect(x + 30, y - 16, 10, 8, '#80ed99');
-        rect(x + 30, y + 2, 10, 8, '#80ed99');
-        rect(x + 40, y - 10, 8, 10, '#34d399');
-        rect(x + 40, y + 0, 8, 10, '#34d399');
-        rect(x - 6, y - 33, 2, 2, '#111');
-        rect(x + 0, y - 33, 2, 2, '#111');
-        rect(x + 6, y - 18, 4, 3, '#ffd6ff');
-      } else if (r.species === 'fish') {
-        rect(x - 18, y - 10, 26, 16, r.colorA);
-        rect(x + 8, y - 5, 10, 8, r.colorB);
-        rect(x - 24, y - 2, 8, 6, r.colorB);
-        rect(x - 8, y - 14, 8, 4, '#ffffff66');
-      } else if (r.species === 'crab') {
-        rect(x - 14, y - 8, 24, 16, r.colorA);
-        rect(x - 20, y - 12, 6, 6, r.colorB);
-        rect(x + 10, y - 12, 6, 6, r.colorB);
-        rect(x - 18, y + 8, 4, 8, r.colorB);
-        rect(x - 8, y + 8, 4, 8, r.colorB);
-        rect(x + 2, y + 8, 4, 8, r.colorB);
-        rect(x + 12, y + 8, 4, 8, r.colorB);
-      } else if (r.species === 'ray') {
-        rect(x - 20, y - 4, 36, 8, r.colorA);
-        rect(x - 10, y - 12, 14, 24, r.colorA);
-        rect(x + 16, y - 2, 14, 4, r.colorB);
-        rect(x - 3, y - 1, 6, 4, '#ffffff55');
-      } else {
-        rect(x - 12, y - 10, 20, 18, r.colorA);
-        rect(x - 4, y - 18, 8, 8, '#ffd6ff');
-        for (let i = 0; i < 4; i++) rect(x - 18 + i * 8, y + 8, 4, 8, r.colorB);
-      }
+  if (r.isPlayer) {
+    const t = performance.now();
+    const blink = Math.floor(t / 2000) % 4 === 0;
+    const tailOffset = Math.sin(t * 0.01) * 4;
 
+    // Hair
+    rect(x - 18, y - 48, 36, 12, '#f15bb5'); // pink hair
+    rect(x - 16, y - 36, 32, 8, '#ff77b7'); // flowing locks
+
+    // Face
+    rect(x - 12, y - 28, 24, 16, '#f1c27d');
+    if (!blink) {
+      rect(x - 6, y - 22, 3, 3, '#111'); // left eye
+      rect(x + 3, y - 22, 3, 3, '#111'); // right eye
+    } else {
+      rect(x - 6, y - 21, 3, 1, '#111'); // blinking
+      rect(x + 3, y - 21, 3, 1, '#111');
+    }
+
+    // Body / top
+    rect(x - 10, y - 12, 20, 12, '#ff77c8');
+    rect(x - 8, y, 16, 10, '#ffaad1');
+
+    // Tail (animated)
+    rect(x - 2 + tailOffset, y + 10, 18, 10, '#2ec4b6');
+    rect(x + 14 + tailOffset, y + 4, 12, 8, '#34d399');
+    rect(x + 14 + tailOffset, y + 14, 12, 8, '#34d399');
+
+    // Fins
+    rect(x - 6, y + 10, 4, 10, '#20c997');
+    rect(x + 12, y + 12, 8, 8, '#38b000');
+
+    // Optional sparkles / highlights
+    rect(x - 2, y - 11, 4, 3, '#ffffff');
+
+  } else if (r.species === 'fish') {
+    rect(x - 18, y - 10, 26, 16, r.colorA);
+    rect(x + 8, y - 5, 10, 8, r.colorB);
+    rect(x - 24, y - 2, 8, 6, r.colorB);
+    rect(x - 8, y - 14, 8, 4, '#ffffff66');
+  } else if (r.species === 'crab') {
+    rect(x - 14, y - 8, 24, 16, r.colorA);
+    rect(x - 20, y - 12, 6, 6, r.colorB);
+    rect(x + 10, y - 12, 6, 6, r.colorB);
+    rect(x - 18, y + 8, 4, 8, r.colorB);
+    rect(x - 8, y + 8, 4, 8, r.colorB);
+    rect(x + 2, y + 8, 4, 8, r.colorB);
+    rect(x + 12, y + 8, 4, 8, r.colorB);
+  } else if (r.species === 'ray') {
+    rect(x - 20, y - 4, 36, 8, r.colorA);
+    rect(x - 10, y - 12, 14, 24, r.colorA);
+    rect(x + 16, y - 2, 14, 4, r.colorB);
+    rect(x - 3, y - 1, 6, 4, '#ffffff55');
+  } else {
+    rect(x - 12, y - 10, 20, 18, r.colorA);
+    rect(x - 4, y - 18, 8, 8, '#ffd6ff');
+    for (let i = 0; i < 4; i++) rect(x - 18 + i * 8, y + 8, 4, 8, r.colorB);
+  }
+
+  if (r.hitCooldown > 0) {
+    rect(x - 20, y - 34, 40, 4, '#ff595e');
+  }
       if (r.hitCooldown > 0) {
         rect(x - 20, y - 34, 40, 4, '#ff595e');
       }
